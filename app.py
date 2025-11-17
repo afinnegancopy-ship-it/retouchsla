@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 from io import BytesIO
+import pyexcel as p
 
 # ----------------------------
 # Configuration
@@ -34,29 +35,74 @@ def working_days_diff(start, end):
 # ----------------------------
 st.title("📊 Retouch SLA Checker")
 
-uploaded_file = st.file_uploader("Upload your Excel file", type=['xls', 'xlsx'])
+uploaded_file = st.file_uploader("Upload your Excel file", type=['xls', 'xlsx', 'csv'])
 today = st.date_input("Select today's date", dt.date.today())
 
 if uploaded_file:
 
     # --------------------------------------------
-    # SAFE EXCEL LOADING (fix for corrupted files)
+    # BULLET-PROOF FILE LOADER
     # --------------------------------------------
     file_ext = uploaded_file.name.split(".")[-1].lower()
 
-    try:
+    def load_excel_safely(uploaded_file, file_ext):
+        """
+        Attempts:
+        1. openpyxl (xlsx)
+        2. csv fallback
+        3. pyexcel fallback for malformed xlsx
+        4. xlrd for xls
+        """
         if file_ext == "xlsx":
-            df = pd.read_excel(uploaded_file, engine="openpyxl")
-        elif file_ext == "xls":
-            df = pd.read_excel(uploaded_file, engine="xlrd")
-        else:
-            st.error("❌ Unsupported file format. Please upload .xls or .xlsx only.")
-            st.stop()
+            # Try normal XLSX
+            try:
+                return pd.read_excel(uploaded_file, engine="openpyxl"), "xlsx"
+            except Exception:
+                pass
 
-        st.success(f"✅ Loaded {len(df)} rows and {len(df.columns)} columns.")
+            # Try CSV fallback
+            try:
+                uploaded_file.seek(0)
+                return pd.read_csv(uploaded_file), "csv-fallback"
+            except Exception:
+                pass
+
+            # Try pyexcel final fallback
+            try:
+                uploaded_file.seek(0)
+                book = p.get_book(file_type="xlsx", file_content=uploaded_file.read())
+                sheet = book.sheet_by_index(0)
+                df = pd.DataFrame(sheet.to_array())
+                df.columns = df.iloc[0]
+                df = df[1:]
+                return df, "pyexcel"
+            except Exception:
+                pass
+
+            raise Exception("Unrecoverable XLSX corruption")
+
+        elif file_ext == "xls":
+            return pd.read_excel(uploaded_file, engine="xlrd"), "xls"
+
+        elif file_ext == "csv":
+            return pd.read_csv(uploaded_file), "csv"
+
+        else:
+            raise Exception("Unsupported file type")
+
+    try:
+        df, load_method = load_excel_safely(uploaded_file, file_ext)
+
+        if load_method == "pyexcel":
+            st.warning("⚠️ File is corrupted XLSX but was successfully loaded using a recovery method.")
+        elif load_method == "csv-fallback":
+            st.warning("⚠️ File is not a real XLSX. Loaded as CSV.")
+
+        st.success(f"✅ File loaded using: {load_method}")
+        st.info(f"Rows: {len(df)} | Columns: {len(df.columns)}")
 
     except Exception as e:
-        st.error(f"❌ Failed to read Excel file: {e}")
+        st.error(f"❌ Failed to read file: {e}")
         st.stop()
 
     # ----------------------------
@@ -67,7 +113,7 @@ if uploaded_file:
     df.drop(columns=names_to_drop, inplace=True, errors='ignore')
 
     # ----------------------------
-    # Identify Scan In / Scan Out
+    # Identify scan columns
     # ----------------------------
     scan_col = next((c for c in df.columns if 'scan' in c.lower() and 'in' in c.lower()), None)
     if not scan_col:
@@ -82,7 +128,7 @@ if uploaded_file:
         df[scan_out_col] = pd.to_datetime(df[scan_out_col], errors='coerce')
 
     # ----------------------------
-    # Add new SLA columns
+    # Add SLA columns
     # ----------------------------
     new_cols = [
         'Stills Out of SLA', 'Day(s) out of SLA - STILLS',
@@ -90,14 +136,13 @@ if uploaded_file:
         'Mannequin Out of SLA', 'Day(s) out of SLA - MANNEQUIN',
         'Notes', 'Days in Studio'
     ]
-
     for col in new_cols:
         df[col] = np.nan
 
-    # Convert any date-like column
-    date_cols = [c for c in df.columns if 'date' in c.lower()]
-    for c in date_cols:
-        df[c] = pd.to_datetime(df[c], errors='coerce')
+    # Convert any date-like columns
+    for c in df.columns:
+        if "date" in c.lower():
+            df[c] = pd.to_datetime(df[c], errors='coerce')
 
     # ----------------------------
     # SLA Logic
@@ -124,31 +169,21 @@ if uploaded_file:
                 for s, e in zip(start, effective_end)
             ]
 
-            df[f"Day(s) out of SLA - {prefix.upper()}"] = np.maximum(
-                np.array(days_diff) - SLA_DAYS[prefix.upper()],
-                0
-            )
+            out_days = np.maximum(np.array(days_diff) - SLA_DAYS[prefix.upper()], 0)
 
-            df[f"{prefix} Out of SLA"] = np.where(
-                df[f"Day(s) out of SLA - {prefix.upper()}"] > 0,
-                "LATE",
-                ""
-            )
+            df[f"Day(s) out of SLA - {prefix.upper()}"] = out_days
+            df[f"{prefix} Out of SLA"] = np.where(out_days > 0, "LATE", "")
 
     # ----------------------------
-    # "Awaiting model shot" Note
+    # Awaiting model shot note
     # ----------------------------
     if "Photo Still Date" in df.columns and scan_out_col:
         mask = df[scan_out_col].isna() & df["Photo Still Date"].notna()
-
-        diff_days = df.loc[mask, "Photo Still Date"].apply(
-            lambda d: working_days_diff(d.date(), today)
-        )
-
-        df.loc[mask & (diff_days > 2), "Notes"] = "Awaiting model shot"
+        diff = df.loc[mask, "Photo Still Date"].apply(lambda x: working_days_diff(x.date(), today))
+        df.loc[mask & (diff > 2), "Notes"] = "Awaiting model shot"
 
     # ----------------------------
-    # Days in Studio
+    # Days in studio
     # ----------------------------
     def compute_days_in_studio(row):
         scan_in = row.get(scan_col)
@@ -158,7 +193,6 @@ if uploaded_file:
             'Photo Still Date', 'Photo Model Date', 'Photo Mannequin Date',
             'Still Upload Date', 'Model Upload Date', 'Mannequin Upload Date'
         ]
-
         all_blank = all(pd.isna(row.get(c)) for c in shot_cols)
 
         if pd.notna(scan_in) and pd.notna(scan_out) and all_blank:
@@ -167,33 +201,29 @@ if uploaded_file:
             return "SCANNED OUT"
         elif pd.notna(scan_in):
             return working_days_diff(scan_in.date(), today)
-        else:
-            return np.nan
 
-    df["Days in Studio"] = df.apply(compute_days_in_studio, axis=1)
+        return np.nan
+
+    df['Days in Studio'] = df.apply(compute_days_in_studio, axis=1)
 
     # ----------------------------
-    # SLA Status Summary
+    # SLA summary column
     # ----------------------------
     sla_cols = ['Stills Out of SLA', 'Model Out of SLA', 'Mannequin Out of SLA']
-
-    df['SLA status'] = df[sla_cols].apply(
-        lambda row: "LATE" if "LATE" in row.values else "",
-        axis=1
-    )
+    df["SLA status"] = df[sla_cols].apply(lambda r: "LATE" if "LATE" in r.values else "", axis=1)
 
     # ----------------------------
-    # Display & Download
+    # Preview + Download
     # ----------------------------
     st.subheader("Processed Data")
     st.dataframe(df)
 
     output = BytesIO()
-    df.to_excel(output, index=False, engine='openpyxl')
+    df.to_excel(output, index=False, engine="openpyxl")
 
     st.download_button(
-        label="📥 Download Processed Excel",
-        data=output.getvalue(),
+        "📥 Download Processed Excel",
+        output.getvalue(),
         file_name=f"check_retouch_processed_{today}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
