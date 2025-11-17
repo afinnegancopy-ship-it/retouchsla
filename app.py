@@ -30,7 +30,6 @@ def working_days_diff(start, end):
 # Streamlit UI
 # ----------------------------
 st.title("📊 Retouch SLA Checker")
-
 uploaded_file = st.file_uploader("Upload your Excel file", type=['xls', 'xlsx'])
 today = st.date_input("Select today's date", dt.date.today())
 
@@ -39,9 +38,11 @@ if uploaded_file:
     try:
         if file_ext == "xls":
             df = pd.read_excel(uploaded_file, engine="xlrd")
+            uploaded_file_type = "xls"
         else:
             df = pd.read_excel(uploaded_file, engine="openpyxl")
-        st.success(f"✅ Loaded {len(df)} rows and {len(df.columns)} columns.")
+            uploaded_file_type = "xlsx"
+        st.success(f"✅ Loaded {len(df)} rows and {len(df.columns)} columns from .{uploaded_file_type}")
     except Exception as e:
         st.error(f"❌ Failed to read Excel file: {e}")
         st.stop()
@@ -146,7 +147,7 @@ if uploaded_file:
     df["SLA status"] = df[sla_cols].apply(lambda r: "LATE" if "LATE" in r.values else "", axis=1)
 
     # ----------------------------
-    # Display + Download
+    # Display + Download as .xlsx
     # ----------------------------
     st.subheader("Processed Data")
     st.dataframe(df)
@@ -154,9 +155,14 @@ if uploaded_file:
     output = BytesIO()
     df.to_excel(output, index=False, engine="openpyxl")
 
+    download_name = f"check_retouch_processed_{today}"
+    if uploaded_file_type == "xls":
+        download_name += "_converted_from_xls"
+    download_name += ".xlsx"
+
     st.download_button(
         "📥 Download Processed Excel",
         output.getvalue(),
-        file_name=f"check_retouch_processed_{today}.xlsx",
+        file_name=download_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
