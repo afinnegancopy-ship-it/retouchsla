@@ -6,3 +6,4 @@ pyexcel
 pyexcel-xlsx
 pyarrow
 xlsxwriter
+openpyxl
