@@ -2,8 +2,4 @@ streamlit
 pandas
 numpy
 xlrd==2.0.1
-pyexcel
-pyexcel-xlsx
-pyarrow
-xlsxwriter
 openpyxl
