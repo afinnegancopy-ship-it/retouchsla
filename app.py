@@ -30,25 +30,20 @@ def working_days_diff(start, end):
 # Streamlit UI
 # ----------------------------
 st.title("📊 Retouch SLA Checker")
-uploaded_file = st.file_uploader("Upload your Excel file", type=['xls', 'xlsx'])
+uploaded_file = st.file_uploader("Upload your Excel file (.xls)", type=['xls'])
 today = st.date_input("Select today's date", dt.date.today())
 
 if uploaded_file:
-    file_ext = uploaded_file.name.split(".")[-1].lower()
     try:
-        if file_ext == "xls":
-            df = pd.read_excel(uploaded_file, engine="xlrd")
-            uploaded_file_type = "xls"
-        else:
-            df = pd.read_excel(uploaded_file, engine="openpyxl")
-            uploaded_file_type = "xlsx"
-        st.success(f"✅ Loaded {len(df)} rows and {len(df.columns)} columns from .{uploaded_file_type}")
+        # Read .xls using xlrd
+        df = pd.read_excel(uploaded_file, engine="xlrd")
+        st.success(f"✅ Loaded {len(df)} rows and {len(df.columns)} columns from .xls")
     except Exception as e:
         st.error(f"❌ Failed to read Excel file: {e}")
         st.stop()
 
     # ----------------------------
-    # Drop columns
+    # Drop unwanted columns
     # ----------------------------
     indices = sorted({excel_col_to_index(l) for l in COLS_TO_DELETE})
     names_to_drop = [df.columns[i] for i in indices if i < len(df.columns)]
@@ -69,7 +64,7 @@ if uploaded_file:
         df[scan_out_col] = pd.to_datetime(df[scan_out_col], errors='coerce')
 
     # ----------------------------
-    # Add SLA Columns
+    # Add SLA-related columns
     # ----------------------------
     new_cols = [
         'Stills Out of SLA', 'Day(s) out of SLA - STILLS',
@@ -80,6 +75,7 @@ if uploaded_file:
     for col in new_cols:
         df[col] = np.nan
 
+    # Convert date-like columns
     for c in df.columns:
         if "date" in c.lower():
             df[c] = pd.to_datetime(df[c], errors='coerce')
@@ -112,7 +108,7 @@ if uploaded_file:
             df[f"{prefix} Out of SLA"] = np.where(out_days > 0, "LATE", "")
 
     # ----------------------------
-    # Notes: Awaiting model shot
+    # Notes for awaiting model shot
     # ----------------------------
     if "Photo Still Date" in df.columns and scan_out_col:
         mask = df[scan_out_col].isna() & df["Photo Still Date"].notna()
@@ -155,13 +151,10 @@ if uploaded_file:
     output = BytesIO()
     df.to_excel(output, index=False, engine="openpyxl")
 
-    download_name = f"check_retouch_processed_{today}"
-    if uploaded_file_type == "xls":
-        download_name += "_converted_from_xls"
-    download_name += ".xlsx"
+    download_name = f"check_retouch_processed_{today}_converted_from_xls.xlsx"
 
     st.download_button(
-        "📥 Download Processed Excel",
+        "📥 Download Processed Excel (.xlsx)",
         output.getvalue(),
         file_name=download_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
