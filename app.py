@@ -5,10 +5,11 @@ import datetime as dt
 from io import BytesIO
 import pyexcel as p
 
+
 # ----------------------------
 # Configuration
 # ----------------------------
-COLS_TO_DELETE = ['A', 'C', 'D', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'S', 'X', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG']
+COLS_TO_DELETE = ['A','C','D','H','I','J','K','L','M','N','O','P','Q','S','X','AB','AC','AD','AE','AF','AG']
 SLA_DAYS = {'STILLS': 2, 'MODEL': 2, 'MANNEQUIN': 2}
 
 
@@ -31,76 +32,57 @@ def working_days_diff(start, end):
 
 
 # ----------------------------
+# BULLETPROOF FILE LOADER
+# ----------------------------
+def load_any_excel(uploaded_file):
+    name = uploaded_file.name.lower()
+
+    # CSV direct load
+    if name.endswith(".csv"):
+        uploaded_file.seek(0)
+        return pd.read_csv(uploaded_file), "csv"
+
+    # XLS via xlrd
+    if name.endswith(".xls"):
+        uploaded_file.seek(0)
+        try:
+            return pd.read_excel(uploaded_file, engine="xlrd"), "xls"
+        except Exception:
+            pass  # fallback to pyexcel below
+
+    # EVERYTHING ELSE (xlsx, fake xlsx, corrupted xlsx, WPS, SAP, ERP)
+    try:
+        uploaded_file.seek(0)
+        file_bytes = uploaded_file.read()
+
+        book = p.get_book(file_type="xlsx", file_content=file_bytes)
+        sheet = book.sheet_by_index(0)
+        df = pd.DataFrame(sheet.to_array())
+
+        # promote first row to headers
+        df.columns = df.iloc[0]
+        df = df[1:].reset_index(drop=True)
+
+        return df, "pyexcel-xlsx"
+    except Exception as e:
+        raise Exception(f"Unable to parse file using any safe method: {e}")
+
+
+# ----------------------------
 # Streamlit UI
 # ----------------------------
 st.title("📊 Retouch SLA Checker")
-
 uploaded_file = st.file_uploader("Upload your Excel file", type=['xls', 'xlsx', 'csv'])
 today = st.date_input("Select today's date", dt.date.today())
 
+
 if uploaded_file:
 
-    # --------------------------------------------
-    # BULLET-PROOF FILE LOADER
-    # --------------------------------------------
-    file_ext = uploaded_file.name.split(".")[-1].lower()
-
-    def load_excel_safely(uploaded_file, file_ext):
-        """
-        Attempts:
-        1. openpyxl (xlsx)
-        2. csv fallback
-        3. pyexcel fallback for malformed xlsx
-        4. xlrd for xls
-        """
-        if file_ext == "xlsx":
-            # Try normal XLSX
-            try:
-                return pd.read_excel(uploaded_file, engine="openpyxl"), "xlsx"
-            except Exception:
-                pass
-
-            # Try CSV fallback
-            try:
-                uploaded_file.seek(0)
-                return pd.read_csv(uploaded_file), "csv-fallback"
-            except Exception:
-                pass
-
-            # Try pyexcel final fallback
-            try:
-                uploaded_file.seek(0)
-                book = p.get_book(file_type="xlsx", file_content=uploaded_file.read())
-                sheet = book.sheet_by_index(0)
-                df = pd.DataFrame(sheet.to_array())
-                df.columns = df.iloc[0]
-                df = df[1:]
-                return df, "pyexcel"
-            except Exception:
-                pass
-
-            raise Exception("Unrecoverable XLSX corruption")
-
-        elif file_ext == "xls":
-            return pd.read_excel(uploaded_file, engine="xlrd"), "xls"
-
-        elif file_ext == "csv":
-            return pd.read_csv(uploaded_file), "csv"
-
-        else:
-            raise Exception("Unsupported file type")
-
+    # LOAD FILE SAFELY
     try:
-        df, load_method = load_excel_safely(uploaded_file, file_ext)
-
-        if load_method == "pyexcel":
-            st.warning("⚠️ File is corrupted XLSX but was successfully loaded using a recovery method.")
-        elif load_method == "csv-fallback":
-            st.warning("⚠️ File is not a real XLSX. Loaded as CSV.")
-
-        st.success(f"✅ File loaded using: {load_method}")
-        st.info(f"Rows: {len(df)} | Columns: {len(df.columns)}")
-
+        df, load_method = load_any_excel(uploaded_file)
+        st.success(f"Loaded file using: {load_method}")
+        st.info(f"Rows: {len(df)}, Columns: {len(df.columns)}")
     except Exception as e:
         st.error(f"❌ Failed to read file: {e}")
         st.stop()
@@ -113,22 +95,23 @@ if uploaded_file:
     df.drop(columns=names_to_drop, inplace=True, errors='ignore')
 
     # ----------------------------
-    # Identify scan columns
+    # Identify Scan In & Out Date columns
     # ----------------------------
     scan_col = next((c for c in df.columns if 'scan' in c.lower() and 'in' in c.lower()), None)
     if not scan_col:
         st.error("❌ Could not find a 'Scan In Date' column.")
         st.stop()
 
-    df[scan_col] = pd.to_datetime(df[scan_col], errors='coerce')
-    df = df[~df[scan_col].isna()]
-
     scan_out_col = next((c for c in df.columns if 'scan' in c.lower() and 'out' in c.lower()), None)
+
+    df[scan_col] = pd.to_datetime(df[scan_col], errors='coerce')
     if scan_out_col:
         df[scan_out_col] = pd.to_datetime(df[scan_out_col], errors='coerce')
 
+    df = df[~df[scan_col].isna()]
+
     # ----------------------------
-    # Add SLA columns
+    # Add SLA Columns
     # ----------------------------
     new_cols = [
         'Stills Out of SLA', 'Day(s) out of SLA - STILLS',
@@ -139,7 +122,7 @@ if uploaded_file:
     for col in new_cols:
         df[col] = np.nan
 
-    # Convert any date-like columns
+    # Convert date-like columns
     for c in df.columns:
         if "date" in c.lower():
             df[c] = pd.to_datetime(df[c], errors='coerce')
@@ -155,7 +138,6 @@ if uploaded_file:
 
     for prefix, (photo_col, upload_col) in sla_mapping.items():
         if photo_col in df.columns:
-
             start = df[photo_col]
             end = df[upload_col] if upload_col in df.columns else pd.NaT
 
@@ -175,7 +157,7 @@ if uploaded_file:
             df[f"{prefix} Out of SLA"] = np.where(out_days > 0, "LATE", "")
 
     # ----------------------------
-    # Awaiting model shot note
+    # Awaiting model shot
     # ----------------------------
     if "Photo Still Date" in df.columns and scan_out_col:
         mask = df[scan_out_col].isna() & df["Photo Still Date"].notna()
@@ -183,7 +165,7 @@ if uploaded_file:
         df.loc[mask & (diff > 2), "Notes"] = "Awaiting model shot"
 
     # ----------------------------
-    # Days in studio
+    # Days in Studio
     # ----------------------------
     def compute_days_in_studio(row):
         scan_in = row.get(scan_col)
@@ -193,6 +175,7 @@ if uploaded_file:
             'Photo Still Date', 'Photo Model Date', 'Photo Mannequin Date',
             'Still Upload Date', 'Model Upload Date', 'Mannequin Upload Date'
         ]
+
         all_blank = all(pd.isna(row.get(c)) for c in shot_cols)
 
         if pd.notna(scan_in) and pd.notna(scan_out) and all_blank:
@@ -213,7 +196,7 @@ if uploaded_file:
     df["SLA status"] = df[sla_cols].apply(lambda r: "LATE" if "LATE" in r.values else "", axis=1)
 
     # ----------------------------
-    # Preview + Download
+    # Display + Download
     # ----------------------------
     st.subheader("Processed Data")
     st.dataframe(df)
