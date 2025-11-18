@@ -2,10 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime as dt
-import os
-import time
 import tempfile
-import win32com.client as win32
+import os
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Alignment
@@ -32,43 +30,27 @@ def working_days_diff(start, end):
         return np.nan
     return np.busday_count(start, end)
 
-def read_excel_safely(path):
-    """Reads .xls files even if corrupted by resaving them as .xlsx."""
-    try:
-        return pd.read_excel(path)
-    except Exception:
-        excel = win32.Dispatch("Excel.Application")
-        excel.DisplayAlerts = False
-        excel.Visible = False
-        try:
-            wb = excel.Workbooks.Open(path)
-            new_path = os.path.splitext(path)[0] + "_converted.xlsx"
-            if os.path.exists(new_path):
-                os.remove(new_path)
-                time.sleep(1)
-            wb.SaveAs(new_path, FileFormat=51)
-            wb.Close(SaveChanges=False)
-            excel.Quit()
-            return pd.read_excel(new_path)
-        except Exception as conv_err:
-            excel.Quit()
-            raise conv_err
-
 # ----------------------------
 # Streamlit App
 # ----------------------------
 st.title("Retouch SLA Checker")
 
-uploaded_file = st.file_uploader("Upload your .xls file", type=["xls", "xlsx"])
+uploaded_file = st.file_uploader("Upload your Excel file (.xls or .xlsx)", type=["xls", "xlsx"])
 today_input = st.date_input("Today's date", dt.date.today())
 
 if uploaded_file:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xls") as tmp_file:
+    # Save uploaded file to temporary location
+    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
         tmp_file.write(uploaded_file.read())
         tmp_file_path = tmp_file.name
 
+    # Read Excel safely
     try:
-        df = read_excel_safely(tmp_file_path)
+        if tmp_file_path.endswith(".xls"):
+            # xlrd <2.0 is needed for old .xls files
+            df = pd.read_excel(tmp_file_path, engine="xlrd")
+        else:
+            df = pd.read_excel(tmp_file_path, engine="openpyxl")
         st.success(f"Loaded {len(df)} rows and {len(df.columns)} columns.")
     except Exception as e:
         st.error(f"Failed to read Excel file: {e}")
@@ -172,7 +154,7 @@ if uploaded_file:
         df = df[cols]
 
     # Save processed Excel
-    output_path = os.path.join(tempfile.gettempdir(), f"check_retouch_processed.xlsx")
+    output_path = os.path.join(tempfile.gettempdir(), "check_retouch_processed.xlsx")
     df.to_excel(output_path, index=False)
 
     # Excel formatting
