@@ -47,8 +47,7 @@ if uploaded_file:
     # Read Excel safely
     try:
         if tmp_file_path.endswith(".xls"):
-            # xlrd <2.0 is needed for old .xls files
-            df = pd.read_excel(tmp_file_path, engine="xlrd")
+            df = pd.read_excel(tmp_file_path, engine="xlrd")  # pandas 1.5.3 + xlrd 1.2.0 supports .xls
         else:
             df = pd.read_excel(tmp_file_path, engine="openpyxl")
         st.success(f"Loaded {len(df)} rows and {len(df.columns)} columns.")
