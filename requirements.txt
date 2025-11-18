@@ -1,5 +1,8 @@
-pywin32
-pypiwin32
-win32com
+streamlit
+pandas
+numpy
+openpyxl
+xlrd
+xlsxwriter
 
 
