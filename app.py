@@ -76,7 +76,7 @@ def parse_date_uk(value):
 # ----------------------------
 st.title("📸 Retouch SLA Checker")
 
-uploaded = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
+uploaded = st.file_uploader("Upload Excel File, ⚠️Format must be XLSX⚠️", type=["xlsx", "xls"])
 today = st.date_input("Today's Date", dt.date.today())
 
 def read_excel_safely(upload):
@@ -221,3 +221,4 @@ if uploaded and st.button("Process File"):
         file_name="processed_retouch_sla.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
